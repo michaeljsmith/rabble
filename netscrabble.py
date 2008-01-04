@@ -66,19 +66,13 @@ class ServerChannel(object):
 		return self.id
 
 	def listen(self, on_message, on_finished):
-		id, io = self.id, self.io
-		class Thread(threading.Thread):
-			def run(self):
-				try:
-					while not io.is_end():
-						message = io.read_message()
-						if message:
-							on_message(id, message)
-				finally:
-					on_finished(id)
-		thread = Thread()
-		thread.setDaemon(True)
-		thread.start()
+		try:
+			while not self.io.is_end():
+				message = self.io.read_message()
+				if message:
+					on_message(self.id, message)
+		finally:
+			on_finished(self.id)
 
 	def cleanup(self):
 		self.io.cleanup()
@@ -87,33 +81,38 @@ class Server(object):
 	def __init__(self, model):
 		self.channels = {}
 		self.model = model
+		self.message_semaphore = threading.Semaphore(0)
+		self.message_queue = ServerChannelMessageQueue()
+		self.finished = False
 
 	def add_channel(self, channel):
 		self.channels[channel.get_id()] = channel
 
-	def run(self):
-		message_semaphore = threading.Semaphore(0)
-		message_queue = ServerChannelMessageQueue()
 		def channel_finished(id):
-			message_queue.append(ServerChannelMessage(id, None))
-			message_semaphore.release()
+			self.message_queue.append(ServerChannelMessage(id, None))
+			if not self.channels:
+				self.finished = True
+			self.message_semaphore.release()
 		def message_received(id, message):
-			message_queue.append(ServerChannelMessage(id, message))
-			message_semaphore.release()
+			self.message_queue.append(ServerChannelMessage(id, message))
+			self.message_semaphore.release()
 
-		for channel in self.channels.itervalues():
-			print 'DEBUG: Server.run(): starting channel'
-			channel.listen(message_received, channel_finished)
+		channel.listen(message_received, channel_finished)
 
-		while self.channels:
-			print 'DEBUG: Server.run(): waiting for message'
-			message_semaphore.acquire()
-			message = message_queue.pop()
-			print 'DEBUG: Server.run(): received message'
-			if not message.message:
-				self.cleanup_channel(message.id)
-			else:
-				self.handle_message(message.id, message.message)
+	def start(self):
+		server = self
+		class Thread(threading.Thread):
+			def run(self):
+				while not server.finished:
+					server.message_semaphore.acquire()
+					message = server.message_queue.pop()
+					if not message.message:
+						server.cleanup_channel(message.id)
+					else:
+						server.handle_message(message.id, message.message)
+		thread = Thread()
+		thread.setDaemon(True)
+		thread.start()
 
 	def handle_message(self, id, message):
 		self.model.handle_message(id, message.strip())
@@ -129,7 +128,6 @@ class StdServerChannelIO(ServerChannelIO):
 		self.eof = False
 
 	def read_message(self):
-		print 'DEBUG: StdServerChannelIO.read_message'
 		message = sys.stdin.readline()
 		if not message:
 			self.eof = True
@@ -156,8 +154,8 @@ def main():
 	model = Model()
 	server = Server(model)
 	std_channel = create_std_server_channel(0)
+	server.start()
 	server.add_channel(std_channel)
-	server.run()
 
 if __name__ == '__main__':
 	main()
