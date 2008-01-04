@@ -2,6 +2,10 @@
 
 import threading
 import sys
+import time
+import os
+import subprocess
+import errno
 
 class ServerChannelMessage(object):
 	def __init__(self, id, message):
@@ -71,6 +75,7 @@ class ServerChannel(object):
 				message = self.io.read_message()
 				if message:
 					on_message(self.id, message)
+			print 'channel ended'
 		finally:
 			on_finished(self.id)
 
@@ -90,8 +95,6 @@ class Server(object):
 
 		def channel_finished(id):
 			self.message_queue.append(ServerChannelMessage(id, None))
-			if not self.channels:
-				self.finished = True
 			self.message_semaphore.release()
 		def message_received(id, message):
 			self.message_queue.append(ServerChannelMessage(id, message))
@@ -106,12 +109,12 @@ class Server(object):
 				while not server.finished:
 					server.message_semaphore.acquire()
 					message = server.message_queue.pop()
+					print 'server got message: "%s"' % str(message)
 					if not message.message:
 						server.cleanup_channel(message.id)
 					else:
 						server.handle_message(message.id, message.message)
 		thread = Thread()
-		thread.setDaemon(True)
 		thread.start()
 
 	def handle_message(self, id, message):
@@ -121,6 +124,8 @@ class Server(object):
 		channel = self.channels[id]
 		del self.channels[id]
 		channel.cleanup()
+		if not self.channels:
+			self.finished = True
 
 class StdServerChannelIO(ServerChannelIO):
 	def __init__(self):
@@ -134,7 +139,7 @@ class StdServerChannelIO(ServerChannelIO):
 		return message
 
 	def write_message(self, message):
-		sys.stdout.writeline()
+		sys.stdout.writeline(message)
 
 	def is_end(self):
 		return self.eof
@@ -147,16 +152,73 @@ def create_std_server_channel(id):
 	channel = ServerChannel(id, io)
 	return channel
 
-def main():
+class ChildProcessServerChannelIO(ServerChannelIO):
+	def __init__(self, cmd):
+		ServerChannelIO.__init__(self)
+		self.process = subprocess.Popen([cmd], shell=True,
+			stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
+
+	def read_message(self):
+		message = self.process.stdout.readline()
+		return message
+
+	def write_message(self, message):
+		self.process.stdin(message + '\n')
+
+	def is_end(self):
+		return self.process.stdout.closed
+
+	def cleanup(self):
+		self.process.stdin.close()
+
+def create_child_process_server_channel(id, cmd):
+	io = ChildProcessServerChannelIO(cmd)
+	channel = ServerChannel(id, io)
+	return channel
+
+def run_server(args):
 	class Model(object):
 		def handle_message(self, id, message):
 			print 'SERVER RECV: %d: %s' % (id, message)
 	model = Model()
 	server = Server(model)
-	std_channel = create_std_server_channel(0)
 	server.start()
+
+	child_process_channel = create_child_process_server_channel(1, 'netscrabble dummy-engine')
+	class Thread(threading.Thread):
+		def run(self):
+			server.add_channel(child_process_channel)
+	child_thread = Thread()
+	child_thread.start()
+
+	std_channel = create_std_server_channel(0)
 	server.add_channel(std_channel)
 
+def run_dummy_engine():
+	while True:
+		time.sleep(1.0)
+		print 'dummy-engine'
+		sys.stdout.flush()
+
+def main(argv):
+	args_valid = True
+	if len(argv) >= 2:
+		command = argv[1]
+		if command == 'server':
+			run_server(argv)
+		elif command == 'dummy-engine':
+			run_dummy_engine()
+		else:
+			args_valid = False
+	else:
+		args_valid = False
+		
+	if not args_valid:
+		print '  Usage: %s <command>' % argv[0]
+		print '    where <command> is one of:'
+		print '    - server'
+		print '    - dummy-engine'
+
 if __name__ == '__main__':
-	main()
+	main(sys.argv)
 
