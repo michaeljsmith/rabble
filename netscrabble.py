@@ -47,8 +47,8 @@ class ServerChannel(object):
 		self.agent = agent
 		self.master_channel = master_channel
 
-	def get_id(self):
-		return self.id
+	def send_message(self, message):
+		self.io.send_message(message)
 
 	def listen(self, on_message, on_finished):
 		try:
@@ -72,8 +72,9 @@ class Server(object):
 		self.finished = False
 
 	def add_channel(self, channel):
-		self.channels[channel.get_id()] = channel
+		self.channels[channel.id] = channel
 
+	def listen_to_channel(self, channel_id):
 		def channel_finished(id):
 			self.message_queue.append(ServerChannelMessage(id, None))
 			self.message_semaphore.release()
@@ -81,6 +82,7 @@ class Server(object):
 			self.message_queue.append(ServerChannelMessage(id, message))
 			self.message_semaphore.release()
 
+		channel = self.channels[channel_id]
 		channel.listen(message_received, channel_finished)
 
 	def start(self):
@@ -111,6 +113,10 @@ class Server(object):
 		if num_master_channels == 0:
 			self.finished = True
 
+	def send_message(self, agent, message):
+		channel = self.channels[agent.channel_id]
+		channel.send_message(message)
+
 class StdServerChannelIO(ServerChannelIO):
 	def __init__(self):
 		ServerChannelIO.__init__(self)
@@ -122,8 +128,8 @@ class StdServerChannelIO(ServerChannelIO):
 			self.eof = True
 		return message
 
-	def write_message(self, message):
-		sys.stdout.writeline(message)
+	def send_message(self, message):
+		sys.stdout.write(message + '\n')
 
 	def is_end(self):
 		return self.eof
@@ -133,7 +139,7 @@ class StdServerChannelIO(ServerChannelIO):
 
 def create_std_server_channel(id, model):
 	io = StdServerChannelIO()
-	agent = model.create_agent()
+	agent = model.create_agent(id)
 	channel = ServerChannel(id, io, agent, True)
 	return channel
 
@@ -147,8 +153,8 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 		message = self.process.stdout.readline()
 		return message
 
-	def write_message(self, message):
-		self.process.stdin(message + '\n')
+	def send_message(self, message):
+		self.process.stdin.write(message + '\n')
 
 	def is_end(self):
 		return self.process.stdout.closed
@@ -158,13 +164,14 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 
 def create_child_process_server_channel(id, model, cmd):
 	io = ChildProcessServerChannelIO(cmd)
-	agent = model.create_agent()
+	agent = model.create_agent(id)
 	channel = ServerChannel(id, io, agent)
 	return channel
 
 class GameServerAgent(object):
-	def __init__(self, id):
+	def __init__(self, id, channel_id):
 		self.id = id
+		self.channel_id = channel_id
 
 	def handle_message(self, message):
 		print 'SERVER RECV: %d: %s' % (self.id, message)
@@ -177,9 +184,9 @@ class GameServerModel(object):
 		self.games = {}
 		self.last_game_id = 0
 
-	def create_agent(self):
+	def create_agent(self, channel_id):
 		id = self.alloc_agent_id()
-		agent = GameServerAgent(id)
+		agent = GameServerAgent(id, channel_id)
 		self.agents[id] = agent
 		return agent
 
@@ -191,6 +198,10 @@ class GameServerModel(object):
 		game = self.game_factory(id)
 		self.games[id] = game
 		return game
+
+	def start_game(self, game, server):
+		for agent in game.agents:
+			server.send_message(agent, 'start_game')
 
 	def alloc_agent_id(self):
 		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
@@ -221,12 +232,14 @@ def run_server(args):
 	child_thread.start()
 
 	std_channel = create_std_server_channel(0, model)
+	server.add_channel(std_channel)
 
 	game = model.create_game()
 	game.set_agent(0, std_channel.agent)
 	game.set_agent(1, child_process_channel.agent)
+	model.start_game(game, server)
 
-	server.add_channel(std_channel)
+	server.listen_to_channel(std_channel.id)
 
 	print 'main thread exitting'
 
