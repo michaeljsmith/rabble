@@ -36,27 +36,6 @@ class ThreadMessageQueue(object):
 class ServerChannelMessageQueue(ThreadMessageQueue):
 	pass
 
-class ServerChannelMessageQueue(object):
-	def __init__(self):
-		self.items = []
-		self.lock = threading.Lock()
-
-	def append(self, message):
-		self.lock.acquire()
-		try:
-			self.items.append(message)
-		finally:
-			self.lock.release()
-
-	def pop(self):
-		self.lock.acquire()
-		message = None
-		try:
-			message = self.items.pop(0)
-		finally:
-			self.lock.release()
-		return message
-
 class ServerChannelIO(object):
 	def __init__(self):
 		pass
@@ -110,8 +89,6 @@ class Server(object):
 				while not server.finished:
 					server.message_semaphore.acquire()
 					message = server.message_queue.pop()
-					if message.id == 0:
-						print 'got message'
 					if not message.message:
 						server.cleanup_channel(message.id)
 					else:
@@ -129,7 +106,6 @@ class Server(object):
 		channel.cleanup()
 		num_master_channels = len([x for x in self.channels.itervalues()
 			if x.master_channel])
-		print num_master_channels, self.channels
 		if num_master_channels == 0:
 			self.finished = True
 
@@ -182,11 +158,29 @@ def create_child_process_server_channel(id, cmd):
 	channel = ServerChannel(id, io)
 	return channel
 
+class ScrabbleServerAgent(object):
+	def __init__(self, id):
+		self.id = id
+
+class ScrabbleServerModel(object):
+	def __init__(self):
+		self.agents = {}
+		self.last_agent_id = 0
+
+	def create_agent(self):
+		id = self.alloc_agent_id()
+		agent = ScrabbleServerAgent(id)
+		return agent
+
+	def handle_message(self, id, message):
+		print 'SERVER RECV: %d: %s' % (id, message)
+
+	def alloc_agent_id(self):
+		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
+		return id
+
 def run_server(args):
-	class Model(object):
-		def handle_message(self, id, message):
-			print 'SERVER RECV: %d: %s' % (id, message)
-	model = Model()
+	model = ScrabbleServerModel()
 	server = Server(model)
 	server.start()
 
