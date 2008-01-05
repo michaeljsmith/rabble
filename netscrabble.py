@@ -41,9 +41,10 @@ class ServerChannelIO(object):
 		pass
 
 class ServerChannel(object):
-	def __init__(self, id, io, master_channel=False):
+	def __init__(self, id, io, agent, master_channel=False):
 		self.id = id
 		self.io = io
+		self.agent = agent
 		self.master_channel = master_channel
 
 	def get_id(self):
@@ -98,7 +99,8 @@ class Server(object):
 		thread.start()
 
 	def handle_message(self, id, message):
-		self.model.handle_message(id, message.strip())
+		channel = self.channels[id]
+		self.model.handle_message(channel.agent, message.strip())
 
 	def cleanup_channel(self, id):
 		channel = self.channels[id]
@@ -129,9 +131,10 @@ class StdServerChannelIO(ServerChannelIO):
 	def cleanup(self):
 		pass
 
-def create_std_server_channel(id):
+def create_std_server_channel(id, model):
 	io = StdServerChannelIO()
-	channel = ServerChannel(id, io, True)
+	agent = model.create_agent()
+	channel = ServerChannel(id, io, agent, True)
 	return channel
 
 class ChildProcessServerChannelIO(ServerChannelIO):
@@ -153,45 +156,76 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 	def cleanup(self):
 		self.process.stdin.close()
 
-def create_child_process_server_channel(id, cmd):
+def create_child_process_server_channel(id, model, cmd):
 	io = ChildProcessServerChannelIO(cmd)
-	channel = ServerChannel(id, io)
+	agent = model.create_agent()
+	channel = ServerChannel(id, io, agent)
 	return channel
 
-class ScrabbleServerAgent(object):
+class GameServerAgent(object):
 	def __init__(self, id):
 		self.id = id
 
-class ScrabbleServerModel(object):
-	def __init__(self):
+	def handle_message(self, message):
+		print 'SERVER RECV: %d: %s' % (self.id, message)
+
+class GameServerModel(object):
+	def __init__(self, game_factory):
+		self.game_factory = game_factory
 		self.agents = {}
 		self.last_agent_id = 0
+		self.games = {}
+		self.last_game_id = 0
 
 	def create_agent(self):
 		id = self.alloc_agent_id()
-		agent = ScrabbleServerAgent(id)
+		agent = GameServerAgent(id)
+		self.agents[id] = agent
 		return agent
 
-	def handle_message(self, id, message):
-		print 'SERVER RECV: %d: %s' % (id, message)
+	def handle_message(self, agent, message):
+		agent.handle_message(message)
+
+	def create_game(self):
+		id = self.alloc_game_id()
+		game = self.game_factory(id)
+		self.games[id] = game
+		return game
 
 	def alloc_agent_id(self):
 		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
 		return id
 
+	def alloc_game_id(self):
+		id, self.last_game_id = self.last_game_id, self.last_game_id + 1
+		return id
+
+class ScrabbleGame(object):
+	def __init__(self, id):
+		self.id = id
+		self.agents = [None, None]
+
+	def set_agent(self, index, agent):
+		self.agents[index] = agent
+
 def run_server(args):
-	model = ScrabbleServerModel()
+	model = GameServerModel(ScrabbleGame)
 	server = Server(model)
 	server.start()
 
-	child_process_channel = create_child_process_server_channel(1, 'netscrabble dummy-engine')
+	child_process_channel = create_child_process_server_channel(1, model, 'netscrabble dummy-engine')
 	class Thread(threading.Thread):
 		def run(self):
 			server.add_channel(child_process_channel)
 	child_thread = Thread()
 	child_thread.start()
 
-	std_channel = create_std_server_channel(0)
+	std_channel = create_std_server_channel(0, model)
+
+	game = model.create_game()
+	game.set_agent(0, std_channel.agent)
+	game.set_agent(1, child_process_channel.agent)
+
 	server.add_channel(std_channel)
 
 	print 'main thread exitting'
