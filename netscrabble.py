@@ -62,9 +62,10 @@ class ServerChannelIO(object):
 		pass
 
 class ServerChannel(object):
-	def __init__(self, id, io):
+	def __init__(self, id, io, master_channel=False):
 		self.id = id
 		self.io = io
+		self.master_channel = master_channel
 
 	def get_id(self):
 		return self.id
@@ -75,8 +76,8 @@ class ServerChannel(object):
 				message = self.io.read_message()
 				if message:
 					on_message(self.id, message)
-			print 'channel ended'
 		finally:
+			print 'channel ended'
 			on_finished(self.id)
 
 	def cleanup(self):
@@ -109,11 +110,13 @@ class Server(object):
 				while not server.finished:
 					server.message_semaphore.acquire()
 					message = server.message_queue.pop()
-					print 'server got message: "%s"' % str(message)
+					if message.id == 0:
+						print 'got message'
 					if not message.message:
 						server.cleanup_channel(message.id)
 					else:
 						server.handle_message(message.id, message.message)
+				print 'server thread exitting'
 		thread = Thread()
 		thread.start()
 
@@ -124,7 +127,10 @@ class Server(object):
 		channel = self.channels[id]
 		del self.channels[id]
 		channel.cleanup()
-		if not self.channels:
+		num_master_channels = len([x for x in self.channels.itervalues()
+			if x.master_channel])
+		print num_master_channels, self.channels
+		if num_master_channels == 0:
 			self.finished = True
 
 class StdServerChannelIO(ServerChannelIO):
@@ -149,7 +155,7 @@ class StdServerChannelIO(ServerChannelIO):
 
 def create_std_server_channel(id):
 	io = StdServerChannelIO()
-	channel = ServerChannel(id, io)
+	channel = ServerChannel(id, io, True)
 	return channel
 
 class ChildProcessServerChannelIO(ServerChannelIO):
@@ -193,6 +199,8 @@ def run_server(args):
 
 	std_channel = create_std_server_channel(0)
 	server.add_channel(std_channel)
+
+	print 'main thread exitting'
 
 def run_dummy_engine():
 	while True:
