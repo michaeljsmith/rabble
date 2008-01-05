@@ -172,9 +172,13 @@ class GameServerAgent(object):
 	def __init__(self, id, channel_id):
 		self.id = id
 		self.channel_id = channel_id
+		self.name = '<UNSET>'
 
 	def handle_message(self, message):
 		print 'SERVER RECV: %d: %s' % (self.id, message)
+
+	def set_name(self, name):
+		self.name = name
 
 class GameServerModel(object):
 	def __init__(self, game_factory):
@@ -200,8 +204,11 @@ class GameServerModel(object):
 		return game
 
 	def start_game(self, game, server):
-		for agent in game.agents:
+		for agent_index, agent in enumerate(game.agents):
 			server.send_message(agent, 'start_game')
+			server.send_message(agent, 'player_index %d' % agent_index)
+			for other_agent_index, other_agent in enumerate(game.agents):
+				server.send_message(agent, 'player %d %s' % (other_agent_index, other_agent.name))
 
 	def alloc_agent_id(self):
 		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
@@ -224,15 +231,20 @@ def run_server(args):
 	server = Server(model)
 	server.start()
 
+	std_channel = create_std_server_channel(0, model)
+	std_channel.agent.set_name('player%d' % std_channel.agent.id)
+	server.add_channel(std_channel)
+
 	child_process_channel = create_child_process_server_channel(1, model, 'netscrabble dummy-engine')
+	child_process_channel.agent.set_name('player%d' % child_process_channel.agent.id)
+	server.add_channel(child_process_channel)
+
 	class Thread(threading.Thread):
 		def run(self):
-			server.add_channel(child_process_channel)
+			server.listen_to_channel(child_process_channel.id)
 	child_thread = Thread()
+	child_thread.setDaemon(True)
 	child_thread.start()
-
-	std_channel = create_std_server_channel(0, model)
-	server.add_channel(std_channel)
 
 	game = model.create_game()
 	game.set_agent(0, std_channel.agent)
