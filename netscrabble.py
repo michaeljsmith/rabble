@@ -102,7 +102,7 @@ class Server(object):
 
 	def handle_message(self, id, message):
 		channel = self.channels[id]
-		self.model.handle_message(channel.agent, message.strip())
+		self.model.handle_message(channel.agent, message.strip(), self)
 
 	def cleanup_channel(self, id):
 		channel = self.channels[id]
@@ -180,8 +180,9 @@ class GameServerAgent(object):
 		self.game = game
 		self.player_index = player_index
 
-	def handle_message(self, message):
-		print 'SERVER RECV: %d: %s' % (self.id, message)
+	def handle_message(self, message, model, server):
+		if self.game:
+			self.game.handle_message(message, self.player_index, server)
 
 	def set_name(self, name):
 		self.name = name
@@ -200,8 +201,8 @@ class GameServerModel(object):
 		self.agents[id] = agent
 		return agent
 
-	def handle_message(self, agent, message):
-		agent.handle_message(message)
+	def handle_message(self, agent, message, server):
+		agent.handle_message(message, self, server)
 
 	def create_game(self):
 		id = self.alloc_game_id()
@@ -210,12 +211,7 @@ class GameServerModel(object):
 		return game
 
 	def start_game(self, game, server):
-		for player_index, player in enumerate(game.players):
-			server.send_message(player.agent, 'start_game')
-			server.send_message(player.agent, 'player_index %d' % player_index)
-			for other_player_index, other_player in enumerate(game.players):
-				server.send_message(player.agent,
-					'player %d %s' % (other_player_index, other_player.agent.name))
+		game.start(server)
 
 	def alloc_agent_id(self):
 		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
@@ -234,12 +230,47 @@ class ScrabbleGame(object):
 	def __init__(self, id):
 		self.id = id
 		self.players = []
+		self.to_move = -1
+
+	def handle_message(self, message, player_index, server):
+		player = self.players[player_index]
+		message = message.strip().lower()
+		if message == 'move':
+			self.request_move(player, server)
+		else:
+			server.send_message(player.agent, 'error unknown_command %s' % message)
 
 	def add_player(self, agent):
 		index = len(self.players)
 		player = ScrabblePlayer(index, agent)
 		self.players.append(player)
 		return player
+
+	def start(self, server):
+		for player_index, player in enumerate(self.players):
+			server.send_message(player.agent, 'start_game')
+			server.send_message(player.agent, 'player_index %d' % player_index)
+			for other_player_index, other_player in enumerate(self.players):
+				server.send_message(player.agent,
+					'player %d %s' % (other_player_index, other_player.agent.name))
+
+		self.to_move = 0
+		self.prompt_turn(server)
+
+	def prompt_turn(self, server):
+		for player_index, player in enumerate(self.players):
+			server.send_message(player.agent, 'to_move %d' % self.to_move)
+
+	def request_move(self, player, server):
+		if self.to_move == player.index:
+			for other_player_index, other_player in enumerate(self.players):
+				server.send_message(other_player.agent,
+					'move %d' % player.index)
+			
+			self.to_move = (self.to_move + 1) % len(self.players)
+			self.prompt_turn(server)
+		else:
+			server.send_message(player.agent, 'error not_to_move')
 
 def run_server(args):
 	model = GameServerModel(ScrabbleGame)
@@ -263,9 +294,9 @@ def run_server(args):
 
 	game = model.create_game()
 	std_agent_player = game.add_player(std_channel.agent)
-	std_channel.agent.set_game(game, std_agent_player)
+	std_channel.agent.set_game(game, std_agent_player.index)
 	child_agent_player = game.add_player(child_process_channel.agent)
-	child_process_channel.agent.set_game(game, child_agent_player)
+	child_process_channel.agent.set_game(game, child_agent_player.index)
 	model.start_game(game, server)
 
 	server.listen_to_channel(std_channel.id)
