@@ -173,6 +173,12 @@ class GameServerAgent(object):
 		self.id = id
 		self.channel_id = channel_id
 		self.name = '<UNSET>'
+		self.game = None
+		self.player_index = -1
+
+	def set_game(self, game, player_index):
+		self.game = game
+		self.player_index = player_index
 
 	def handle_message(self, message):
 		print 'SERVER RECV: %d: %s' % (self.id, message)
@@ -204,11 +210,12 @@ class GameServerModel(object):
 		return game
 
 	def start_game(self, game, server):
-		for agent_index, agent in enumerate(game.agents):
-			server.send_message(agent, 'start_game')
-			server.send_message(agent, 'player_index %d' % agent_index)
-			for other_agent_index, other_agent in enumerate(game.agents):
-				server.send_message(agent, 'player %d %s' % (other_agent_index, other_agent.name))
+		for player_index, player in enumerate(game.players):
+			server.send_message(player.agent, 'start_game')
+			server.send_message(player.agent, 'player_index %d' % player_index)
+			for other_player_index, other_player in enumerate(game.players):
+				server.send_message(player.agent,
+					'player %d %s' % (other_player_index, other_player.agent.name))
 
 	def alloc_agent_id(self):
 		id, self.last_agent_id = self.last_agent_id, self.last_agent_id + 1
@@ -218,13 +225,21 @@ class GameServerModel(object):
 		id, self.last_game_id = self.last_game_id, self.last_game_id + 1
 		return id
 
+class ScrabblePlayer(object):
+	def __init__(self, index, agent):
+		self.index = index
+		self.agent = agent
+
 class ScrabbleGame(object):
 	def __init__(self, id):
 		self.id = id
-		self.agents = [None, None]
+		self.players = []
 
-	def set_agent(self, index, agent):
-		self.agents[index] = agent
+	def add_player(self, agent):
+		index = len(self.players)
+		player = ScrabblePlayer(index, agent)
+		self.players.append(player)
+		return player
 
 def run_server(args):
 	model = GameServerModel(ScrabbleGame)
@@ -247,8 +262,10 @@ def run_server(args):
 	child_thread.start()
 
 	game = model.create_game()
-	game.set_agent(0, std_channel.agent)
-	game.set_agent(1, child_process_channel.agent)
+	std_agent_player = game.add_player(std_channel.agent)
+	std_channel.agent.set_game(game, std_agent_player)
+	child_agent_player = game.add_player(child_process_channel.agent)
+	child_process_channel.agent.set_game(game, child_agent_player)
 	model.start_game(game, server)
 
 	server.listen_to_channel(std_channel.id)
