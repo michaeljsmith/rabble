@@ -304,6 +304,9 @@ class ScrabbleGame(object):
 		self.agents.add(agent)
 		return player
 
+	def add_watcher(self, agent):
+		self.agents.add(agent)
+
 	def start(self, server):
 		for player_index, player in enumerate(self.players):
 			server.send_message(player.agent, 'start_game')
@@ -417,6 +420,8 @@ def run_game(args, child_engines):
 			child_agent_player = game.add_player(child_process_channel.agent)
 			child_process_channel.agent.set_game(game)
 			child_process_channel.agent.add_player_index(child_agent_player.index)
+
+	game.add_watcher(std_channel.agent)
 
 	model.start_game(game, server)
 
