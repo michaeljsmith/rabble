@@ -72,6 +72,8 @@ class ServerChannel(object):
 			while not self.io.is_end():
 				message = self.io.read_message()
 				if message:
+					if not self.master_channel:
+						print '%d: %s' % (self.id, message)
 					on_message(self.id, message)
 		finally:
 			print 'channel ended'
@@ -133,6 +135,7 @@ class Server(object):
 		channel = self.channels[id]
 		del self.channels[id]
 		channel.cleanup()
+		self.model.handle_disconnect(channel.agent, self)
 		num_master_channels = len([x for x in self.channels.itervalues()
 			if x.master_channel])
 		if num_master_channels == 0:
@@ -170,19 +173,22 @@ def create_std_server_channel(id, model):
 
 class ChildProcessServerChannelIO(ServerChannelIO):
 	def __init__(self, cmd):
+		self.eof = False
 		ServerChannelIO.__init__(self)
 		self.process = subprocess.Popen([cmd], shell=True, close_fds=True,
-			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 	def read_message(self):
 		message = self.process.stdout.readline()
+		if not message:
+			self.eof = True
 		return message
 
 	def send_message(self, message):
 		self.process.stdin.write(message + '\n')
 
 	def is_end(self):
-		return self.process.stdout.closed
+		return self.eof
 
 	def cleanup(self):
 		self.process.stdin.close()
@@ -209,6 +215,10 @@ class GameServerAgent(object):
 		if self.game:
 			self.game.handle_message(command, args, self.player_index, server)
 
+	def handle_disconnect(self, model, server):
+		if self.game:
+			self.game.handle_disconnect(self.player_index, server)
+
 	def set_name(self, name):
 		self.name = name
 
@@ -228,6 +238,10 @@ class GameServerModel(object):
 
 	def handle_message(self, agent, command, args, server):
 		agent.handle_message(command, args, self, server)
+
+	def handle_disconnect(self, agent, server):
+		agent.handle_disconnect(self, server)
+		del self.agents[agent.id]
 
 	def create_game(self):
 		id = self.alloc_game_id()
@@ -264,6 +278,10 @@ class ScrabbleGame(object):
 		else:
 			server.send_message(player.agent, 'error unknown_command %s' % command)
 
+	def handle_disconnect(self, player_index, server):
+		self.players[player_index].agent = None
+		self.broadcast(server, 'dropped %d' % player_index)
+
 	def add_player(self, agent):
 		index = len(self.players)
 		player = ScrabblePlayer(index, agent)
@@ -274,27 +292,30 @@ class ScrabbleGame(object):
 		for player_index, player in enumerate(self.players):
 			server.send_message(player.agent, 'start_game')
 			server.send_message(player.agent, 'player_index %d' % player_index)
-			for other_player_index, other_player in enumerate(self.players):
-				server.send_message(player.agent,
-					'player %d %s' % (other_player_index, other_player.agent.name))
+
+		for player_index, player in enumerate(self.players):
+			self.broadcast(server, 'player %d %s' %
+				(player_index, player.agent.name))
 
 		self.to_move = 0
 		self.prompt_turn(server)
 
 	def prompt_turn(self, server):
-		for player_index, player in enumerate(self.players):
-			server.send_message(player.agent, 'to_move %d' % self.to_move)
+		self.broadcast(server, 'to_move %d' % self.to_move)
 
 	def request_move(self, player, server):
 		if self.to_move == player.index:
-			for other_player_index, other_player in enumerate(self.players):
-				server.send_message(other_player.agent,
-					'move %d' % player.index)
+			self.broadcast(server, 'move %d' % player.index)
 			
 			self.to_move = (self.to_move + 1) % len(self.players)
 			self.prompt_turn(server)
 		else:
 			server.send_message(player.agent, 'error not_to_move')
+
+	def broadcast(self, server, message):
+		for player_index, player in enumerate(self.players):
+			if player.agent:
+				server.send_message(player.agent, message)
 
 def run_server(args):
 	model = GameServerModel(ScrabbleGame)
@@ -327,11 +348,34 @@ def run_server(args):
 
 	print 'main thread exitting'
 
-def run_dummy_engine():
-	while True:
-		time.sleep(1.0)
-		print 'dummy-engine'
+class DummyEngine(object):
+	class InputError(Exception): pass
+	def run(self):
+		while True:
+			try:
+				for command, args in self.read_commands():
+					print 'dummy-engine'
+					sys.stdout.flush()
+			except DummyEngine.InputError, e:
+				print 'Invalid command syntax received from server: "%s"' % dir(e)
+				sys.stdout.flush()
+		print 'exitting'
 		sys.stdout.flush()
+	
+	def read_commands(self):
+		while True:
+			message = sys.stdin.readline()
+			if not message:
+				break
+			args = None
+			try:
+				args = explode_args(message)
+			except ExplodeError:
+				raise InputError(message)
+
+			if args:
+				command, args = args[0], args[1:]
+				yield command, args
 
 def main(argv):
 	args_valid = True
@@ -340,7 +384,7 @@ def main(argv):
 		if command == 'server':
 			run_server(argv)
 		elif command == 'dummy-engine':
-			run_dummy_engine()
+			DummyEngine().run()
 		else:
 			args_valid = False
 	else:
