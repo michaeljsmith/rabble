@@ -25,9 +25,10 @@ def explode_args(string):
 		string = string[m.end():]
 
 class ServerChannelMessage(object):
-	def __init__(self, id, message):
+	def __init__(self, id, command, args):
 		self.id = id
-		self.message = message
+		self.command = command
+		self.args = args
 
 class ThreadMessageQueue(object):
 	def __init__(self):
@@ -73,8 +74,22 @@ class ServerChannel(object):
 				message = self.io.read_message()
 				if message:
 					if not self.master_channel:
-						print '%d: %s' % (self.id, message)
-					on_message(self.id, message)
+						print '%d: %s' % (self.id, message.strip())
+
+					args = None
+					error_message = None
+					try:
+						args = explode_args(message)
+					except ExplodeError:
+						error_message = 'invalid_syntax'
+					if error_message:
+						self.send_message('error %s' % error_message)
+
+					if args:
+						command, args = args[0], args[1:]
+						if command == 'exit':
+							break
+						on_message(self.id, command, args)
 		finally:
 			print 'channel ended'
 			on_finished(self.id)
@@ -95,10 +110,10 @@ class Server(object):
 
 	def listen_to_channel(self, channel_id):
 		def channel_finished(id):
-			self.message_queue.append(ServerChannelMessage(id, None))
+			self.message_queue.append(ServerChannelMessage(id, None, None))
 			self.message_semaphore.release()
-		def message_received(id, message):
-			self.message_queue.append(ServerChannelMessage(id, message))
+		def message_received(id, command, args):
+			self.message_queue.append(ServerChannelMessage(id, command, args))
 			self.message_semaphore.release()
 
 		channel = self.channels[channel_id]
@@ -111,24 +126,19 @@ class Server(object):
 				while not server.finished:
 					server.message_semaphore.acquire()
 					message = server.message_queue.pop()
-					if not message.message:
+					if not message.command:
 						server.cleanup_channel(message.id)
 					else:
-						server.handle_message(message.id, message.message)
+						server.handle_message(message.id, message.command, message.args)
 				print 'server thread exitting'
 		thread = Thread()
 		thread.start()
 
-	def handle_message(self, id, message):
+	def handle_message(self, id, command, args):
 		channel = self.channels[id]
-		args = None
-		try:
-			args = explode_args(message)
-		except ExplodeError:
-			print 'invalid command syntax in message: "%s"' % message.strip()
-
-		if args:
-			command, args = args[0], args[1:]
+		if command == 'exit':
+			self.cleanup_channel(id)
+		else:
 			self.model.handle_message(channel.agent, command, args, self)
 
 	def cleanup_channel(self, id):
@@ -266,15 +276,18 @@ class ScrabblePlayer(object):
 		self.agent = agent
 
 class ScrabbleGame(object):
-	def __init__(self, id):
+	def __init__(self, id, word_list):
 		self.id = id
 		self.players = []
 		self.to_move = -1
+		self.word_list = word_list
 
 	def handle_message(self, command, args, player_index, server):
 		player = self.players[player_index]
 		if command == 'move':
 			self.request_move(player, server)
+		elif command == 'get_word_list':
+			self.send_word_list(player, server)
 		else:
 			server.send_message(player.agent, 'error unknown_command %s' % command)
 
@@ -312,13 +325,21 @@ class ScrabbleGame(object):
 		else:
 			server.send_message(player.agent, 'error not_to_move')
 
+	def send_word_list(self, player, server):
+		server.send_message(player.agent, 'word_count %d' % len(self.word_list))
+		for index, word in enumerate(self.word_list):
+			server.send_message(player.agent, 'word %d %s' % (index, word))
+
 	def broadcast(self, server, message):
 		for player_index, player in enumerate(self.players):
 			if player.agent:
 				server.send_message(player.agent, message)
 
 def run_server(args):
-	model = GameServerModel(ScrabbleGame)
+	word_list = set(['cat', 'dog', 'apple', 'drape', 'pear'])
+	def create_game(id):
+		return ScrabbleGame(id, word_list)
+	model = GameServerModel(create_game)
 	server = Server(model)
 	server.start()
 
@@ -354,8 +375,7 @@ class DummyEngine(object):
 		while True:
 			try:
 				for command, args in self.read_commands():
-					print 'dummy-engine'
-					sys.stdout.flush()
+					pass
 			except DummyEngine.InputError, e:
 				print 'Invalid command syntax received from server: "%s"' % dir(e)
 				sys.stdout.flush()
