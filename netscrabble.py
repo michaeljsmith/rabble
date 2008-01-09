@@ -136,10 +136,7 @@ class Server(object):
 
 	def handle_message(self, id, command, args):
 		channel = self.channels[id]
-		if command == 'exit':
-			self.cleanup_channel(id)
-		else:
-			self.model.handle_message(channel.agent, command, args, self)
+		self.model.handle_message(channel.agent, command, args, self)
 
 	def cleanup_channel(self, id):
 		channel = self.channels[id]
@@ -215,19 +212,21 @@ class GameServerAgent(object):
 		self.channel_id = channel_id
 		self.name = '<UNSET>'
 		self.game = None
-		self.player_index = -1
+		self.player_indices = set()
 
-	def set_game(self, game, player_index):
+	def set_game(self, game):
 		self.game = game
-		self.player_index = player_index
+
+	def add_player_index(self, player_index):
+		self.player_indices.add(player_index)
 
 	def handle_message(self, command, args, model, server):
 		if self.game:
-			self.game.handle_message(command, args, self.player_index, server)
+			self.game.handle_message(command, args, self, server)
 
 	def handle_disconnect(self, model, server):
 		if self.game:
-			self.game.handle_disconnect(self.player_index, server)
+			self.game.handle_disconnect(self, server)
 
 	def set_name(self, name):
 		self.name = name
@@ -282,18 +281,18 @@ class ScrabbleGame(object):
 		self.to_move = -1
 		self.word_list = word_list
 
-	def handle_message(self, command, args, player_index, server):
-		player = self.players[player_index]
+	def handle_message(self, command, args, agent, server):
 		if command == 'move':
-			self.request_move(player, server)
+			self.request_move(agent, server)
 		elif command == 'get_word_list':
-			self.send_word_list(player, server)
+			self.send_word_list(agent, server)
 		else:
 			server.send_message(player.agent, 'error unknown_command %s' % command)
 
-	def handle_disconnect(self, player_index, server):
-		self.players[player_index].agent = None
-		self.broadcast(server, 'dropped %d' % player_index)
+	def handle_disconnect(self, agent, server):
+		for player_index in agent.player_indices:
+			self.players[player_index].agent = None
+			self.broadcast(server, 'dropped %d' % player_index)
 
 	def add_player(self, agent):
 		index = len(self.players)
@@ -316,19 +315,19 @@ class ScrabbleGame(object):
 	def prompt_turn(self, server):
 		self.broadcast(server, 'to_move %d' % self.to_move)
 
-	def request_move(self, player, server):
-		if self.to_move == player.index:
-			self.broadcast(server, 'move %d' % player.index)
+	def request_move(self, agent, server):
+		if self.to_move in agent.player_indices:
+			self.broadcast(server, 'move %d' % self.to_move)
 			
 			self.to_move = (self.to_move + 1) % len(self.players)
 			self.prompt_turn(server)
 		else:
-			server.send_message(player.agent, 'error not_to_move')
+			server.send_message(agent, 'error not_to_move')
 
-	def send_word_list(self, player, server):
-		server.send_message(player.agent, 'word_count %d' % len(self.word_list))
+	def send_word_list(self, agent, server):
+		server.send_message(agent, 'word_count %d' % len(self.word_list))
 		for index, word in enumerate(self.word_list):
-			server.send_message(player.agent, 'word %d %s' % (index, word))
+			server.send_message(agent, 'word %d %s' % (index, word))
 
 	def broadcast(self, server, message):
 		for player_index, player in enumerate(self.players):
@@ -359,10 +358,15 @@ def run_server(args):
 	child_thread.start()
 
 	game = model.create_game()
+
 	std_agent_player = game.add_player(std_channel.agent)
-	std_channel.agent.set_game(game, std_agent_player.index)
+	std_channel.agent.set_game(game)
+	std_channel.agent.add_player_index(std_agent_player.index)
+
 	child_agent_player = game.add_player(child_process_channel.agent)
-	child_process_channel.agent.set_game(game, child_agent_player.index)
+	child_process_channel.agent.set_game(game)
+	child_process_channel.agent.add_player_index(child_agent_player.index)
+
 	model.start_game(game, server)
 
 	server.listen_to_channel(std_channel.id)
