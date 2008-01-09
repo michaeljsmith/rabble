@@ -327,11 +327,16 @@ class ScrabbleGame(object):
 		self.prompt_turn(server)
 
 	def print_board(self):
-		sys.stdout.write('+')
+		sys.stdout.write('   ')
+		for col in xrange(self.num_cols):
+			sys.stdout.write(chr(ord('a') + col))
+		sys.stdout.write(' \n')
+		sys.stdout.write('  +')
 		for col in xrange(self.num_cols):
 			sys.stdout.write('-')
 		sys.stdout.write('+\n')
 		for row in xrange(self.num_rows):
+			sys.stdout.write('%2d' % (row + 1))
 			sys.stdout.write('|')
 			for col in xrange(self.num_cols):
 				tile = self.board[row][col]
@@ -340,7 +345,7 @@ class ScrabbleGame(object):
 				else:
 					sys.stdout.write(tile)
 			sys.stdout.write('|\n')
-		sys.stdout.write('+')
+		sys.stdout.write('  +')
 		for col in xrange(self.num_cols):
 			sys.stdout.write('-')
 		sys.stdout.write('+\n')
