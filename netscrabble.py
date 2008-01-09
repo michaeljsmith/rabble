@@ -6,6 +6,23 @@ import time
 import os
 import subprocess
 import errno
+import re
+
+class ExplodeError(Exception): pass
+
+explode_arg_re = re.compile(r'"(?:.*\\")*.*"|[a-zA-Z0-9_]+')
+def explode_args(string):
+	arg_re = explode_arg_re
+	args = []
+	while True:
+		string = string.lstrip()
+		if not string:
+			return args
+		m = arg_re.match(string)
+		if not m:
+			raise ExplodeError()
+		args.append(string[m.start():m.end()].strip('"'))
+		string = string[m.end():]
 
 class ServerChannelMessage(object):
 	def __init__(self, id, message):
@@ -102,7 +119,15 @@ class Server(object):
 
 	def handle_message(self, id, message):
 		channel = self.channels[id]
-		self.model.handle_message(channel.agent, message.strip(), self)
+		args = None
+		try:
+			args = explode_args(message)
+		except ExplodeError:
+			print 'invalid command syntax in message: "%s"' % message.strip()
+
+		if args:
+			command, args = args[0], args[1:]
+			self.model.handle_message(channel.agent, command, args, self)
 
 	def cleanup_channel(self, id):
 		channel = self.channels[id]
@@ -146,8 +171,8 @@ def create_std_server_channel(id, model):
 class ChildProcessServerChannelIO(ServerChannelIO):
 	def __init__(self, cmd):
 		ServerChannelIO.__init__(self)
-		self.process = subprocess.Popen([cmd], shell=True,
-			stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
+		self.process = subprocess.Popen([cmd], shell=True, close_fds=True,
+			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 	def read_message(self):
 		message = self.process.stdout.readline()
@@ -180,9 +205,9 @@ class GameServerAgent(object):
 		self.game = game
 		self.player_index = player_index
 
-	def handle_message(self, message, model, server):
+	def handle_message(self, command, args, model, server):
 		if self.game:
-			self.game.handle_message(message, self.player_index, server)
+			self.game.handle_message(command, args, self.player_index, server)
 
 	def set_name(self, name):
 		self.name = name
@@ -201,8 +226,8 @@ class GameServerModel(object):
 		self.agents[id] = agent
 		return agent
 
-	def handle_message(self, agent, message, server):
-		agent.handle_message(message, self, server)
+	def handle_message(self, agent, command, args, server):
+		agent.handle_message(command, args, self, server)
 
 	def create_game(self):
 		id = self.alloc_game_id()
@@ -232,13 +257,12 @@ class ScrabbleGame(object):
 		self.players = []
 		self.to_move = -1
 
-	def handle_message(self, message, player_index, server):
+	def handle_message(self, command, args, player_index, server):
 		player = self.players[player_index]
-		message = message.strip().lower()
-		if message == 'move':
+		if command == 'move':
 			self.request_move(player, server)
 		else:
-			server.send_message(player.agent, 'error unknown_command %s' % message)
+			server.send_message(player.agent, 'error unknown_command %s' % command)
 
 	def add_player(self, agent):
 		index = len(self.players)
