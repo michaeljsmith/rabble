@@ -223,6 +223,8 @@ class GameServerAgent(object):
 	def handle_message(self, command, args, model, server):
 		if self.game:
 			self.game.handle_message(command, args, self, server)
+		else:
+			server.send_message(self, 'error no_game_selected %s' % command)
 
 	def handle_disconnect(self, model, server):
 		if self.game:
@@ -348,6 +350,7 @@ class AppOptions(object):
 	def __init__(self):
 		self.execute_mode = self.execute_none
 		self.child_engines = []
+		self.word_list_path = None
 
 class OptionArgumentMissingError(Exception):
 	pass
@@ -377,13 +380,37 @@ def parse_command_line(argv):
 			if arg == '-e' or arg == '--engine':
 				path = args.pop(0)
 				options.child_engines.append(path)
+			if arg == '-w' or arg == '--words':
+				path = args.pop(0)
+				options.word_list_path = path
 		except IndexError:
 			raise OptionArgumentMissingError('The option "%s" requires an argument.' % arg)
 
 	return options
 
-def run_game(args, child_engines):
-	word_list = set(['cat', 'dog', 'apple', 'drape', 'pear'])
+class WordListLoadError(Exception):
+	pass
+def load_word_list(word_list_path):
+	word_re = re.compile(r'^([a-z]+)$')
+	words = set()
+	try:
+		f = file(word_list_path, 'r')
+	except IOError:
+		raise WordListLoadError('word_list_path')
+	for line in f:
+		candidate = line.strip()
+		m = word_re.match(candidate)
+		if m:
+			word = m.group(0)
+			words.add(word)
+	return words
+
+def run_game(args, child_engines, word_list_path):
+	try:
+		word_list = load_word_list(word_list_path)
+	except WordListLoadError, e:
+		print 'unable to load word list from "word_list_path".'
+		return
 	def create_game(id):
 		return ScrabbleGame(id, word_list)
 	model = GameServerModel(create_game)
@@ -421,6 +448,7 @@ def run_game(args, child_engines):
 			child_process_channel.agent.set_game(game)
 			child_process_channel.agent.add_player_index(child_agent_player.index)
 
+	std_channel.agent.set_game(game)
 	game.add_watcher(std_channel.agent)
 
 	model.start_game(game, server)
@@ -469,9 +497,12 @@ def main(argv):
 	if options:
 		if options.execute_mode == AppOptions.execute_game:
 			if len(options.child_engines) < 2:
-				args_error = 'At least 2 engines must be specified on command line.'
+				args_error = 'at least 2 engines must be specified on command line using --engine.'
+			elif not options.word_list_path:
+				args_error = 'a file containing the list of valid words must be specified using --words.'
 			else:
-				run_game(argv, options.child_engines)
+				run_game(argv, options.child_engines, options.word_list_path)
+					
 		elif options.execute_mode == AppOptions.execute_dummy_engine:
 			DummyEngine().run()
 		else:
@@ -488,6 +519,7 @@ def main(argv):
 		print '     * dummy-engine'
 		print '    and options can include:'
 		print '     * -e|--engine <path>'
+		print '     * -w|--words <path>'
 
 if __name__ == '__main__':
 	main(sys.argv)
