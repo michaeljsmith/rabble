@@ -278,6 +278,7 @@ class ScrabbleGame(object):
 	def __init__(self, id, word_list):
 		self.id = id
 		self.players = []
+		self.agents = set()
 		self.to_move = -1
 		self.word_list = word_list
 
@@ -292,12 +293,15 @@ class ScrabbleGame(object):
 	def handle_disconnect(self, agent, server):
 		for player_index in agent.player_indices:
 			self.players[player_index].agent = None
+		self.agents.remove(agent)
+		for player_index in agent.player_indices:
 			self.broadcast(server, 'dropped %d' % player_index)
 
 	def add_player(self, agent):
 		index = len(self.players)
 		player = ScrabblePlayer(index, agent)
 		self.players.append(player)
+		self.agents.add(agent)
 		return player
 
 	def start(self, server):
@@ -330,11 +334,52 @@ class ScrabbleGame(object):
 			server.send_message(agent, 'word %d %s' % (index, word))
 
 	def broadcast(self, server, message):
-		for player_index, player in enumerate(self.players):
-			if player.agent:
-				server.send_message(player.agent, message)
+		for agent in self.agents:
+			server.send_message(agent, message)
 
-def run_server(args):
+class AppOptions(object):
+	execute_none = 0
+	execute_game = 1
+	execute_dummy_engine = 2
+
+	def __init__(self):
+		self.execute_mode = self.execute_none
+		self.child_engines = []
+
+class OptionArgumentMissingError(Exception):
+	pass
+
+def parse_command_line(argv):
+
+	options = AppOptions()
+	args = argv[1:]
+
+	if len(args) > 0 and args[0][0] != '-':
+		try:
+			command = args.pop(0).strip().lower()
+		except IndexError:
+			command = None
+		if command == 'game':
+			options.execute_mode = AppOptions.execute_game
+		elif command == 'dummy_engine':
+			options.execute_mode = AppOptions.execute_dummy_engine
+
+	if options.execute_mode == AppOptions.execute_none:
+		options.execute_mode = AppOptions.execute_game
+
+	while args:
+		arg = args.pop(0).strip().lower()
+
+		try:
+			if arg == '-e' or arg == '--engine':
+				path = args.pop(0)
+				options.child_engines.append(path)
+		except IndexError:
+			raise OptionArgumentMissingError('The option "%s" requires an argument.' % arg)
+
+	return options
+
+def run_game(args, child_engines):
 	word_list = set(['cat', 'dog', 'apple', 'drape', 'pear'])
 	def create_game(id):
 		return ScrabbleGame(id, word_list)
@@ -346,26 +391,32 @@ def run_server(args):
 	std_channel.agent.set_name('player%d' % std_channel.agent.id)
 	server.add_channel(std_channel)
 
-	child_process_channel = create_child_process_server_channel(1, model, 'netscrabble dummy-engine')
-	child_process_channel.agent.set_name('player%d' % child_process_channel.agent.id)
-	server.add_channel(child_process_channel)
-
-	class Thread(threading.Thread):
-		def run(self):
-			server.listen_to_channel(child_process_channel.id)
-	child_thread = Thread()
-	child_thread.setDaemon(True)
-	child_thread.start()
-
 	game = model.create_game()
 
-	std_agent_player = game.add_player(std_channel.agent)
-	std_channel.agent.set_game(game)
-	std_channel.agent.add_player_index(std_agent_player.index)
+	for engine in child_engines:
 
-	child_agent_player = game.add_player(child_process_channel.agent)
-	child_process_channel.agent.set_game(game)
-	child_process_channel.agent.add_player_index(child_agent_player.index)
+		if engine == '-':
+
+			std_agent_player = game.add_player(std_channel.agent)
+			std_channel.agent.set_game(game)
+			std_channel.agent.add_player_index(std_agent_player.index)
+
+		else:
+
+			child_process_channel = create_child_process_server_channel(1, model, engine)
+			child_process_channel.agent.set_name('player%d' % child_process_channel.agent.id)
+			server.add_channel(child_process_channel)
+
+			class Thread(threading.Thread):
+				def run(self):
+					server.listen_to_channel(child_process_channel.id)
+			child_thread = Thread()
+			child_thread.setDaemon(True)
+			child_thread.start()
+
+			child_agent_player = game.add_player(child_process_channel.agent)
+			child_process_channel.agent.set_game(game)
+			child_process_channel.agent.add_player_index(child_agent_player.index)
 
 	model.start_game(game, server)
 
@@ -402,23 +453,36 @@ class DummyEngine(object):
 				yield command, args
 
 def main(argv):
-	args_valid = True
-	if len(argv) >= 2:
-		command = argv[1]
-		if command == 'server':
-			run_server(argv)
-		elif command == 'dummy-engine':
+
+	options = None
+	try:
+		options = parse_command_line(argv)
+	except OptionArgumentMissingError, e:
+		print e.message
+
+	args_error = None
+	if options:
+		if options.execute_mode == AppOptions.execute_game:
+			if len(options.child_engines) < 2:
+				args_error = 'At least 2 engines must be specified on command line.'
+			else:
+				run_game(argv, options.child_engines)
+		elif options.execute_mode == AppOptions.execute_dummy_engine:
 			DummyEngine().run()
 		else:
-			args_valid = False
+			args_error = ''
 	else:
-		args_valid = False
+		args_error = ''
 		
-	if not args_valid:
-		print '  Usage: %s <command>' % argv[0]
+	if args_error != None:
+		if args_error:
+			print 'netscrabble error:', args_error
+		print '  Usage: %s <command> [options]' % argv[0]
 		print '    where <command> is one of:'
-		print '    - server'
-		print '    - dummy-engine'
+		print '     * server'
+		print '     * dummy-engine'
+		print '    and options can include:'
+		print '     * -e|--engine <path>'
 
 if __name__ == '__main__':
 	main(sys.argv)
