@@ -276,6 +276,52 @@ class ScrabblePlayer(object):
 		self.index = index
 		self.agent = agent
 
+class ScrabbleMove(object):
+	horizontal = 1
+	vertical = 2
+	def __init__(self, start, direction, letters):
+		self.start = start
+		self.direction = direction
+		self.letters = letters
+
+class ParseMoveError(Exception):
+	pass
+
+parse_move_position_vertical_re = re.compile('^([a-z])([0-9]+)$')
+parse_move_position_horizontal_re = re.compile('^([0-9]+)([a-z])$')
+def parse_move(position_string, letter_string):
+	m = parse_move_position_vertical_re.match(position_string)
+	direction = -1
+	if m:
+		direction = ScrabbleMove.vertical
+		col_string, row_string = m.groups()
+	if direction < 0:
+		m = parse_move_position_horizontal_re.match(position_string)
+		if m:
+			direction = ScrabbleMove.horizontal
+			row_string, col_string = m.groups()
+
+	if direction < 0:
+		raise ParseMoveError()
+
+	row = int(row_string)
+	if row < 0 or row >= ScrabbleGame.num_rows:
+		raise ParseMoveError()
+	col = ord(col_string) - ord('a')
+	if col < 0 or col >= ScrabbleGame.num_cols:
+		raise ParseMoveError()
+
+	letters = []
+	i = 0
+	while i < len(letter_string):
+		c = letter_string[i].lower()
+		i += 1
+		if ord(c) < ord('a') or ord(c) > ord('z'):
+			raise ParseMoveError()
+		letters.append(c)
+
+	return ScrabbleMove((row, col), direction, letters)
+
 class ScrabbleGame(object):
 	num_rows = 15
 	num_cols = 15
@@ -290,11 +336,21 @@ class ScrabbleGame(object):
 
 	def handle_message(self, command, args, agent, server):
 		if command == 'move':
-			self.request_move(agent, server)
+			move = None
+			if len(args) == 2:
+				try:
+					position, word = args
+					move = parse_move(position, word)
+				except ParseMoveError:
+					pass
+			if move:
+				self.request_move(agent, server, position, word)
+			else:
+				server.send_message(agent, 'error move_syntax')
 		elif command == 'get_word_list':
 			self.send_word_list(agent, server)
 		else:
-			server.send_message(player.agent, 'error unknown_command %s' % command)
+			server.send_message(agent, 'error unknown_command %s' % command)
 
 	def handle_disconnect(self, agent, server):
 		for player_index in agent.player_indices:
@@ -353,7 +409,7 @@ class ScrabbleGame(object):
 	def prompt_turn(self, server):
 		self.broadcast(server, 'to_move %d' % self.to_move)
 
-	def request_move(self, agent, server):
+	def request_move(self, agent, server, position, word):
 		if self.to_move in agent.player_indices:
 			self.broadcast(server, 'move %d' % self.to_move)
 			
