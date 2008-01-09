@@ -277,12 +277,16 @@ class ScrabblePlayer(object):
 		self.agent = agent
 
 class ScrabbleGame(object):
+	num_rows = 15
+	num_cols = 15
+
 	def __init__(self, id, word_list):
 		self.id = id
 		self.players = []
 		self.agents = set()
 		self.to_move = -1
 		self.word_list = word_list
+		self.board = ([([None for x in xrange(self.num_cols)]) for y in xrange(self.num_rows)])
 
 	def handle_message(self, command, args, agent, server):
 		if command == 'move':
@@ -319,7 +323,27 @@ class ScrabbleGame(object):
 				(player_index, player.agent.name))
 
 		self.to_move = 0
+		self.print_board()
 		self.prompt_turn(server)
+
+	def print_board(self):
+		sys.stdout.write('+')
+		for col in xrange(self.num_cols):
+			sys.stdout.write('-')
+		sys.stdout.write('+\n')
+		for row in xrange(self.num_rows):
+			sys.stdout.write('|')
+			for col in xrange(self.num_cols):
+				tile = self.board[row][col]
+				if not tile:
+					sys.stdout.write('.')
+				else:
+					sys.stdout.write(tile)
+			sys.stdout.write('|\n')
+		sys.stdout.write('+')
+		for col in xrange(self.num_cols):
+			sys.stdout.write('-')
+		sys.stdout.write('+\n')
 
 	def prompt_turn(self, server):
 		self.broadcast(server, 'to_move %d' % self.to_move)
@@ -329,6 +353,7 @@ class ScrabbleGame(object):
 			self.broadcast(server, 'move %d' % self.to_move)
 			
 			self.to_move = (self.to_move + 1) % len(self.players)
+			self.print_board()
 			self.prompt_turn(server)
 		else:
 			server.send_message(agent, 'error not_to_move')
