@@ -183,7 +183,7 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 	def __init__(self, cmd):
 		self.eof = False
 		ServerChannelIO.__init__(self)
-		self.process = subprocess.Popen([cmd], shell=True, close_fds=True,
+		self.process = subprocess.Popen([cmd], shell=True,
 			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 	def read_message(self):
