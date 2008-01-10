@@ -7,6 +7,7 @@ import os
 import subprocess
 import errno
 import re
+import copy
 
 class ExplodeError(Exception): pass
 
@@ -317,7 +318,7 @@ def parse_move(position_string, letter_string):
 	if direction < 0:
 		raise ParseMoveError()
 
-	row = int(row_string)
+	row = int(row_string) - 1
 	if row < 0 or row >= ScrabbleGame.num_rows:
 		raise ParseMoveError()
 	col = ord(col_string) - ord('a')
@@ -424,7 +425,7 @@ class ScrabbleGame(object):
 
 	def request_move(self, agent, server, move):
 		if self.to_move in agent.player_indices:
-			if self.check_move_valid(move):
+			try:
 				move_score = self.make_move(move)
 				self.broadcast(server, 'move_made %d %s %d' %
 					(self.to_move, str(move), move_score))
@@ -432,16 +433,32 @@ class ScrabbleGame(object):
 				self.to_move = (self.to_move + 1) % len(self.players)
 				self.print_board()
 				self.prompt_turn(server)
-			else:
+			except self.InvalidMove:
 				server.send_message(agent, 'error move_invalid')
 
 		else:
 			server.send_message(agent, 'error not_to_move')
 
-	def check_move_valid(self, move):
-		return True
-
+	class InvalidMove(Exception):
+		pass
 	def make_move(self, move):
+		board = copy.deepcopy(self.board)
+		row, col = move.start
+		dir_x, dir_y = {ScrabbleMove.horizontal: (1, 0), ScrabbleMove.vertical: (0, 1)}[move.direction]
+		other_x, other_y = {ScrabbleMove.horizontal: (0, 1), ScrabbleMove.vertical: (1, 0)}[move.direction]
+		for letter_index in xrange(len(move.letters)):
+			tile_x, tile_y = col + dir_x * letter_index, row + dir_y * letter_index
+			if tile_x < 0 or tile_x >= self.num_cols:
+				raise self.InvalidMove()
+			if tile_y < 0 or tile_y >= self.num_rows:
+				raise self.InvalidMove()
+			current_tile = board[tile_y][tile_x]
+			if current_tile != None:
+				raise self.InvalidMove()
+			board[tile_y][tile_x] = move.letters[letter_index]
+
+		self.board = board
+
 		return 10
 
 	def send_word_list(self, agent, server):
