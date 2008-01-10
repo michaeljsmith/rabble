@@ -74,9 +74,6 @@ class ServerChannel(object):
 			while not self.io.is_end():
 				message = self.io.read_message()
 				if message:
-					if not self.master_channel:
-						print '%d: %s' % (self.id, message.strip())
-
 					args = None
 					error_message = None
 					try:
@@ -90,6 +87,9 @@ class ServerChannel(object):
 						command, args = args[0], args[1:]
 						if command == 'exit':
 							break
+						elif command == 'debug':
+							if len(args) >= 1:
+								print '%d: %s' % (self.id, args[0])
 						on_message(self.id, command, args)
 		finally:
 			print 'channel ended'
@@ -673,9 +673,9 @@ class DummyEngine(object):
 					pass
 				break
 			except DummyEngine.InputError, e:
-				print 'Invalid command syntax received from server: "%s"' % e.message.strip()
+				print 'debug "Invalid command syntax received from server: \"%s\""' % e.message.strip()
 				sys.stdout.flush()
-		print 'exitting'
+		print ' debug "exitting"'
 		sys.stdout.flush()
 	
 	def read_commands(self):
