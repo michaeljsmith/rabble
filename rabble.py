@@ -531,7 +531,9 @@ class ScrabbleGame(object):
 	class InvalidMove(Exception):
 		pass
 	def make_move(self, move):
+		player = self.players[self.to_move]
 		board = copy.deepcopy(self.board)
+		rack = copy.deepcopy(player.rack)
 		score = 0
 		row, col = move.start
 		dir_x, dir_y = {ScrabbleMove.horizontal: (1, 0), ScrabbleMove.vertical: (0, 1)}[move.direction]
@@ -547,7 +549,12 @@ class ScrabbleGame(object):
 			current_tile = board[tile_y][tile_x]
 			if current_tile != None:
 				raise self.InvalidMove()
-			board[tile_y][tile_x] = move.letters[letter_index]
+			tile = move.letters[letter_index]
+			tile_count = rack.get(tile, 0)
+			if tile_count < 1:
+				raise self.InvalidMove()
+			rack[tile] = tile_count - 1
+			board[tile_y][tile_x] = tile
 			words_made.append((tile_x, tile_y, other_x, other_y))
 
 		for pos_x, pos_y, word_dir_x, word_dir_y in words_made:
@@ -581,6 +588,7 @@ class ScrabbleGame(object):
 				print word
 
 		self.board = board
+		player.rack = rack
 
 		return score
 
