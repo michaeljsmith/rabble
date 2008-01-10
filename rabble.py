@@ -591,6 +591,8 @@ class ScrabbleGame(object):
 					score += self.letter_scores[letter]
 
 				print word
+				if word not in self.word_list:
+					raise self.InvalidMove()
 
 		self.board = board
 		player.rack = rack
