@@ -515,10 +515,15 @@ class ScrabbleGame(object):
 	def request_move(self, agent, server, move):
 		if self.to_move in agent.player_indices:
 			try:
+				player = self.players[self.to_move]
+
 				move_score = self.make_move(move)
 				self.broadcast(server, 'move_made %d %s %d' %
 					(self.to_move, str(move), move_score))
-				
+
+				for i in xrange(self.initial_tiles - sum(player.rack.itervalues())):
+					self.draw_tile(player)
+
 				self.to_move = (self.to_move + 1) % len(self.players)
 				self.print_board()
 				self.prompt_turn(server)
