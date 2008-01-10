@@ -296,6 +296,7 @@ class ScrabblePlayer(object):
 		self.index = index
 		self.agent = agent
 		self.rack = {}
+		self.score = 0
 
 class ScrabbleMove(object):
 	horizontal = 1
@@ -483,6 +484,7 @@ class ScrabbleGame(object):
 
 		self.to_move = 0
 		self.print_board()
+		self.print_rack(self.players[self.to_move])
 		self.prompt_turn(server)
 
 	def print_board(self):
@@ -509,6 +511,12 @@ class ScrabbleGame(object):
 			sys.stdout.write('-')
 		sys.stdout.write('+\n')
 
+	def print_rack(self, player):
+		for tile, count in player.rack.iteritems():
+			for j in xrange(count):
+				sys.stdout.write('%c ' % tile)
+		sys.stdout.write('\n')
+
 	def prompt_turn(self, server):
 		self.broadcast(server, 'to_move %d' % self.to_move)
 
@@ -517,15 +525,17 @@ class ScrabbleGame(object):
 			try:
 				player = self.players[self.to_move]
 
-				move_score = self.make_move(move)
+				move_score = self.make_move(player, move)
 				self.broadcast(server, 'move_made %d %s %d' %
 					(self.to_move, str(move), move_score))
+				player.score += move_score
 
 				for i in xrange(self.initial_tiles - sum(player.rack.itervalues())):
 					self.draw_tile(player)
 
 				self.to_move = (self.to_move + 1) % len(self.players)
 				self.print_board()
+				self.print_rack(self.players[self.to_move])
 				self.prompt_turn(server)
 			except self.InvalidMove:
 				server.send_message(agent, 'error move_invalid')
@@ -535,8 +545,7 @@ class ScrabbleGame(object):
 
 	class InvalidMove(Exception):
 		pass
-	def make_move(self, move):
-		player = self.players[self.to_move]
+	def make_move(self, player, move):
 		board = copy.deepcopy(self.board)
 		rack = copy.deepcopy(player.rack)
 		score = 0
@@ -552,13 +561,14 @@ class ScrabbleGame(object):
 			if tile_y < 0 or tile_y >= self.num_rows:
 				raise self.InvalidMove()
 			current_tile = board[tile_y][tile_x]
-			if current_tile != None:
-				raise self.InvalidMove()
 			tile = move.letters[letter_index]
-			tile_count = rack.get(tile, 0)
-			if tile_count < 1:
+			if current_tile != None and current_tile != tile:
 				raise self.InvalidMove()
-			rack[tile] = tile_count - 1
+			tile_count = rack.get(tile, 0)
+			if current_tile != tile:
+				if tile_count < 1:
+					raise self.InvalidMove()
+				rack[tile] = tile_count - 1
 			board[tile_y][tile_x] = tile
 			words_made.append((tile_x, tile_y, other_x, other_y))
 
