@@ -339,6 +339,33 @@ def parse_move(position_string, letter_string):
 class ScrabbleGame(object):
 	num_rows = 15
 	num_cols = 15
+	letter_scores = ({
+		'a': 1,
+		'b': 1,
+		'c': 1,
+		'd': 1,
+		'e': 8,
+		'f': 1,
+		'g': 1,
+		'h': 4,
+		'i': 1,
+		'j': 1,
+		'k': 1,
+		'l': 2,
+		'm': 1,
+		'n': 1,
+		'o': 1,
+		'p': 1,
+		'q': 1,
+		'r': 4,
+		's': 1,
+		't': 1,
+		'u': 1,
+		'v': 2,
+		'w': 1,
+		'x': 1,
+		'y': 2,
+		'z': 3})
 
 	def __init__(self, id, word_list):
 		self.id = id
@@ -443,9 +470,12 @@ class ScrabbleGame(object):
 		pass
 	def make_move(self, move):
 		board = copy.deepcopy(self.board)
+		score = 0
 		row, col = move.start
 		dir_x, dir_y = {ScrabbleMove.horizontal: (1, 0), ScrabbleMove.vertical: (0, 1)}[move.direction]
 		other_x, other_y = {ScrabbleMove.horizontal: (0, 1), ScrabbleMove.vertical: (1, 0)}[move.direction]
+		words_made = []
+		words_made.append((col, row, dir_x, dir_y))
 		for letter_index in xrange(len(move.letters)):
 			tile_x, tile_y = col + dir_x * letter_index, row + dir_y * letter_index
 			if tile_x < 0 or tile_x >= self.num_cols:
@@ -456,10 +486,41 @@ class ScrabbleGame(object):
 			if current_tile != None:
 				raise self.InvalidMove()
 			board[tile_y][tile_x] = move.letters[letter_index]
+			words_made.append((tile_x, tile_y, other_x, other_y))
+
+		for pos_x, pos_y, word_dir_x, word_dir_y in words_made:
+			offsets = [0, 0]
+			scales = [-1, 1]
+			for offset_index in xrange(2):
+				for i in xrange(1, 100000):
+					test_x = pos_x + scales[offset_index] * word_dir_x * i
+					test_y = pos_y + scales[offset_index] * word_dir_y * i
+					if test_x < 0 or test_x >= self.num_cols:
+						break
+					if test_y < 0 or test_y >= self.num_rows:
+						break
+					c = board[test_y][test_x]
+					if c == None:
+						break
+					offsets[offset_index] += scales[offset_index]
+
+			start_offset, end_offset = offsets
+			length = end_offset - start_offset + 1
+
+			if length > 1:
+				word = ''
+				for i in xrange(length):
+					tile_x = pos_x + (start_offset + i) * word_dir_x
+					tile_y = pos_y + (start_offset + i) * word_dir_y
+					letter = board[tile_y][tile_x]
+					word += letter
+					score += self.letter_scores[letter]
+
+				print word
 
 		self.board = board
 
-		return 10
+		return score
 
 	def send_word_list(self, agent, server):
 		server.send_message(agent, 'word_count %d' % len(self.word_list))
