@@ -8,6 +8,7 @@ import subprocess
 import errno
 import re
 import copy
+import random
 
 class ExplodeError(Exception): pass
 
@@ -294,6 +295,7 @@ class ScrabblePlayer(object):
 	def __init__(self, index, agent):
 		self.index = index
 		self.agent = agent
+		self.rack = {}
 
 class ScrabbleMove(object):
 	horizontal = 1
@@ -357,6 +359,7 @@ def parse_move(position_string, letter_string):
 class ScrabbleGame(object):
 	num_rows = 15
 	num_cols = 15
+	initial_tiles = 7
 	letter_scores = ({
 		'a': 1,
 		'b': 3,
@@ -420,6 +423,8 @@ class ScrabbleGame(object):
 		self.to_move = -1
 		self.word_list = word_list
 		self.board = ([([None for x in xrange(self.num_cols)]) for y in xrange(self.num_rows)])
+		self.pool = sum(([x for i in xrange(n)] for x, n in self.letter_frequencies.iteritems()), [])
+		random.shuffle(self.pool)
 
 	def handle_message(self, command, args, agent, server):
 		if command == 'move':
@@ -436,6 +441,13 @@ class ScrabbleGame(object):
 				server.send_message(agent, 'error move_syntax')
 		elif command == 'get_word_list':
 			self.send_word_list(agent, server)
+		elif command == 'get_rack':
+			try:
+				player_index_string, = args
+				player_index = int(player_index_string)
+			except Exception:
+				player_index = -1
+			self.send_rack(agent, server, player_index)
 		else:
 			server.send_message(agent, 'error unknown_command %s' % command)
 
@@ -457,6 +469,10 @@ class ScrabbleGame(object):
 		self.agents.add(agent)
 
 	def start(self, server):
+		for player_index, player in enumerate(self.players):
+			for i in xrange(self.initial_tiles):
+				self.draw_tile(player)
+
 		for player_index, player in enumerate(self.players):
 			server.send_message(player.agent, 'start_game')
 			server.send_message(player.agent, 'player_index %d' % player_index)
@@ -568,10 +584,26 @@ class ScrabbleGame(object):
 
 		return score
 
+	def draw_tile(self, player):
+		tile = self.pool.pop()
+		player.rack[tile] = player.rack.get(tile, 0) + 1
+
 	def send_word_list(self, agent, server):
 		server.send_message(agent, 'word_count %d' % len(self.word_list))
 		for index, word in enumerate(self.word_list):
 			server.send_message(agent, 'word %d %s' % (index, word))
+
+	def send_rack(self, agent, server, player_index):
+		if player_index in agent.player_indices:
+			player = self.players[player_index]
+			server.send_message(agent, 'tile_count %d' % sum(player.rack.itervalues()))
+			i = 0
+			for tile, count in player.rack.iteritems():
+				for j in xrange(count):
+					server.send_message(agent, 'tile %d %c' % (i, tile))
+					i += 1
+		else:
+			server.send_message(agent, 'error invalid_player_index')
 
 	def broadcast(self, server, message):
 		for agent in self.agents:
