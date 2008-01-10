@@ -284,6 +284,19 @@ class ScrabbleMove(object):
 		self.direction = direction
 		self.letters = letters
 
+	def __str__(self):
+		row, col = self.start
+		if self.direction == self.horizontal:
+			pos_str = '%d%c' % (row, chr(ord('a') + col))
+		else:
+			pos_str = '%c%d' % (chr(ord('a') + col), row)
+		
+		word_str = ''
+		for letter in self.letters:
+			word_str += letter
+
+		return '%s %s' % (pos_str, word_str)
+
 class ParseMoveError(Exception):
 	pass
 
@@ -344,7 +357,7 @@ class ScrabbleGame(object):
 				except ParseMoveError:
 					pass
 			if move:
-				self.request_move(agent, server, position, word)
+				self.request_move(agent, server, move)
 			else:
 				server.send_message(agent, 'error move_syntax')
 		elif command == 'get_word_list':
@@ -409,15 +422,27 @@ class ScrabbleGame(object):
 	def prompt_turn(self, server):
 		self.broadcast(server, 'to_move %d' % self.to_move)
 
-	def request_move(self, agent, server, position, word):
+	def request_move(self, agent, server, move):
 		if self.to_move in agent.player_indices:
-			self.broadcast(server, 'move %d' % self.to_move)
-			
-			self.to_move = (self.to_move + 1) % len(self.players)
-			self.print_board()
-			self.prompt_turn(server)
+			if self.check_move_valid(move):
+				move_score = self.make_move(move)
+				self.broadcast(server, 'move_made %d %s %d' %
+					(self.to_move, str(move), move_score))
+				
+				self.to_move = (self.to_move + 1) % len(self.players)
+				self.print_board()
+				self.prompt_turn(server)
+			else:
+				server.send_message(agent, 'error move_invalid')
+
 		else:
 			server.send_message(agent, 'error not_to_move')
+
+	def check_move_valid(self, move):
+		return True
+
+	def make_move(self, move):
+		return 10
 
 	def send_word_list(self, agent, server):
 		server.send_message(agent, 'word_count %d' % len(self.word_list))
@@ -551,7 +576,7 @@ class DummyEngine(object):
 				for command, args in self.read_commands():
 					pass
 			except DummyEngine.InputError, e:
-				print 'Invalid command syntax received from server: "%s"' % dir(e)
+				print 'Invalid command syntax received from server: "%s"' % e.message.strip()
 				sys.stdout.flush()
 		print 'exitting'
 		sys.stdout.flush()
@@ -565,7 +590,7 @@ class DummyEngine(object):
 			try:
 				args = explode_args(message)
 			except ExplodeError:
-				raise InputError(message)
+				raise self.InputError(message)
 
 			if args:
 				command, args = args[0], args[1:]
