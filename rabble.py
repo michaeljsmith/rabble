@@ -95,6 +95,9 @@ class ServerChannel(object):
 			print 'channel ended'
 			on_finished(self.id)
 
+	def close(self):
+		self.io.close()
+
 	def cleanup(self):
 		self.io.cleanup()
 
@@ -132,6 +135,8 @@ class Server(object):
 					else:
 						server.handle_message(message.id, message.command, message.args)
 				print 'server thread exitting'
+				for channel in server.channels.itervalues():
+					channel.close()
 		thread = Thread()
 		thread.start()
 
@@ -173,6 +178,9 @@ class StdServerChannelIO(ServerChannelIO):
 	def cleanup(self):
 		pass
 
+	def close(self):
+		pass
+
 def create_std_server_channel(id, model):
 	io = StdServerChannelIO()
 	agent = model.create_agent(id)
@@ -199,6 +207,10 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 		return self.eof
 
 	def cleanup(self):
+		self.process.stdin.close()
+
+	def close(self):
+		self.process.stdin.write(chr(255))
 		self.process.stdin.close()
 
 def create_child_process_server_channel(id, model, cmd):
