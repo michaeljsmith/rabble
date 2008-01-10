@@ -134,9 +134,9 @@ class Server(object):
 						server.cleanup_channel(message.id)
 					else:
 						server.handle_message(message.id, message.command, message.args)
-				print 'server thread exitting'
 				for channel in server.channels.itervalues():
 					channel.close()
+				print 'server thread exitting'
 		thread = Thread()
 		thread.start()
 
@@ -191,8 +191,9 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 	def __init__(self, cmd):
 		self.eof = False
 		ServerChannelIO.__init__(self)
-		self.process = subprocess.Popen([cmd], shell=True,
+		self.process = subprocess.Popen([cmd], shell=True, bufsize=1,
 			stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+		print 'process =', self.process.pid
 
 	def read_message(self):
 		message = self.process.stdout.readline()
@@ -201,7 +202,10 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 		return message
 
 	def send_message(self, message):
-		self.process.stdin.write(message + '\n')
+		try:
+			self.process.stdin.write(message + '\n')
+		except ValueError:
+			pass
 
 	def is_end(self):
 		return self.eof
@@ -210,8 +214,10 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 		self.process.stdin.close()
 
 	def close(self):
-		self.process.stdin.write(chr(255))
 		self.process.stdin.close()
+		print 'waiting for engine process (pid=%d) to exit...' % self.process.pid
+		retcode = self.process.wait()
+		print 'process exitted with return code %d' % retcode
 
 def create_child_process_server_channel(id, model, cmd):
 	io = ChildProcessServerChannelIO(cmd)
@@ -665,6 +671,7 @@ class DummyEngine(object):
 			try:
 				for command, args in self.read_commands():
 					pass
+				break
 			except DummyEngine.InputError, e:
 				print 'Invalid command syntax received from server: "%s"' % e.message.strip()
 				sys.stdout.flush()
