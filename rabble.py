@@ -159,6 +159,11 @@ class Server(object):
 		channel = self.channels[agent.channel_id]
 		channel.send_message(message)
 
+	def kick(self, agent):
+		print 'kicking agent %d' % agent.id
+		channel = self.channels[agent.channel_id]
+		channel.close()
+
 class StdServerChannelIO(ServerChannelIO):
 	def __init__(self):
 		ServerChannelIO.__init__(self)
@@ -184,7 +189,8 @@ class StdServerChannelIO(ServerChannelIO):
 
 def create_std_server_channel(id, model):
 	io = StdServerChannelIO()
-	agent = model.create_agent(id)
+	privileges = GameServerAgentPrivileges(admin_privs=True)
+	agent = model.create_agent(id, privileges)
 	channel = ServerChannel(id, io, agent, True)
 	return channel
 
@@ -222,17 +228,23 @@ class ChildProcessServerChannelIO(ServerChannelIO):
 
 def create_child_process_server_channel(id, model, cmd):
 	io = ChildProcessServerChannelIO(cmd)
-	agent = model.create_agent(id)
+	privileges = GameServerAgentPrivileges(admin_privs=True)
+	agent = model.create_agent(id, privileges)
 	channel = ServerChannel(id, io, agent)
 	return channel
 
+class GameServerAgentPrivileges(object):
+	def __init__(self, admin_privs=False):
+		self.admin_privs = admin_privs
+
 class GameServerAgent(object):
-	def __init__(self, id, channel_id):
+	def __init__(self, id, channel_id, privileges):
 		self.id = id
 		self.channel_id = channel_id
 		self.name = '<UNSET>'
 		self.game = None
 		self.player_indices = set()
+		self.privileges = privileges
 
 	def set_game(self, game):
 		self.game = game
@@ -241,10 +253,26 @@ class GameServerAgent(object):
 		self.player_indices.add(player_index)
 
 	def handle_message(self, command, args, model, server):
-		if self.game:
-			self.game.handle_message(command, args, self, server)
+		if command == 'kick':
+			if self.privileges.admin_privs:
+				try:
+					agent_string, = args
+					agent_id = int(agent_string)
+					agent = model.agents[agent_id]
+				except:
+					agent = None
+				if agent:
+					server.kick(agent)
+				else:
+					server.send_message(self, 'error invalid_user')
+
+			else:
+				server.send_message(self, 'error permission_denied %s' % command)
 		else:
-			server.send_message(self, 'error no_game_selected %s' % command)
+			if self.game:
+				self.game.handle_message(command, args, self, server)
+			else:
+				server.send_message(self, 'error no_game_selected %s' % command)
 
 	def handle_disconnect(self, model, server):
 		if self.game:
@@ -261,9 +289,9 @@ class GameServerModel(object):
 		self.games = {}
 		self.last_game_id = 0
 
-	def create_agent(self, channel_id):
+	def create_agent(self, channel_id, privileges):
 		id = self.alloc_agent_id()
-		agent = GameServerAgent(id, channel_id)
+		agent = GameServerAgent(id, channel_id, privileges)
 		self.agents[id] = agent
 		return agent
 
